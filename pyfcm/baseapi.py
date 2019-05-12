@@ -28,6 +28,7 @@ class BaseAPI(object):
         proxy_dict (dict): use proxy (keys: `http`, `https`)
         env (str): for example "app_engine"
         json_encoder
+        adapter: requests.adapters.HTTPAdapter()
     """
 
     CONTENT_TYPE = "application/json"
@@ -50,7 +51,7 @@ class BaseAPI(object):
     # Number of times to retry calls to info endpoint
     INFO_RETRIES = 3
 
-    def __init__(self, loop=None, api_key=None, proxy_dict=None, env=None, json_encoder=None):
+    def __init__(self, loop=None, api_key=None, proxy_dict=None, env=None, json_encoder=None, adapter=None):
         self.loop = loop
 
         if api_key:
@@ -69,8 +70,8 @@ class BaseAPI(object):
 
         retries = Retry(backoff_factor=1, status_forcelist=[502, 503, 504],
                         method_whitelist=(Retry.DEFAULT_METHOD_WHITELIST | frozenset(['POST'])))
-        self.requests_session.mount('http://', HTTPAdapter(max_retries=retries))
-        self.requests_session.mount('https://', HTTPAdapter(max_retries=retries))
+        self.requests_session.mount('http://', adapter or HTTPAdapter(max_retries=retries))
+        self.requests_session.mount('https://', adapter or HTTPAdapter(max_retries=retries))
         self.requests_session.headers.update(self.request_headers())
         self.requests_session.mount(self.INFO_END_POINT, HTTPAdapter(max_retries=self.INFO_RETRIES))
 
