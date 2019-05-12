@@ -66,7 +66,7 @@ class BaseAPI(object):
 
         self.aiodns = AsyncResolver(loop=self.loop, nameservers=["8.8.8.8", "8.8.4.4"])
         self.aiohttp_connector = aiohttp.TCPConnector(loop=self.loop, limit=0, ttl_dns_cache=600, resolver=self.aiodns, family=socket.AF_INET)
-        self.aiohttp_session = ClientSession(headers=self.request_headers(), connector=self.aiohttp_connector, connector_owner=False)
+        self.aiohttp_session = ClientSession(loop=self.loop, headers=self.request_headers(), connector=self.aiohttp_connector, connector_owner=False)
 
         retries = Retry(backoff_factor=1, status_forcelist=[502, 503, 504],
                         method_whitelist=(Retry.DEFAULT_METHOD_WHITELIST | frozenset(['POST'])))
@@ -316,9 +316,17 @@ class BaseAPI(object):
 
         return self.json_dumps(fcm_payload)
 
-    async def do_request(self, payload, timeout):
+    def do_request(self, payload, timeout):
+        response = self.requests_session.post(self.FCM_END_POINT, data=payload, timeout=timeout)
+        if 'Retry-After' in response.headers and int(response.headers['Retry-After']) > 0:
+            sleep_time = int(response.headers['Retry-After'])
+            time.sleep(sleep_time)
+            return self.do_request(payload, timeout)
+        return response
+
+    async def ado_request(self, payload, timeout):
         _timeout = aiohttp.ClientTimeout(total=timeout)
-        async with ClientSession(loop=self.loop, headers=self.request_headers(), connector=self.aiohttp_connector, connector_owner=False) as session:
+        async with self.aiohttp_session as session:
             async with session.post(self.FCM_END_POINT, data=payload, timeout=_timeout) as _response:
                 txt = await _response.text()
                 if 'Retry-After' in _response.headers and int(_response.headers['Retry-After']) > 0:
@@ -330,10 +338,16 @@ class BaseAPI(object):
 
                 return _response.status, _response.headers, txt
 
-    async def send_request(self, payloads=None, timeout=None):
+    def send_request(self, payloads=None, timeout=None):
         self.send_request_responses = []
         for payload in payloads:
-            response = await self.do_request(payload, timeout)
+            response = self.do_request(payload, timeout)
+            self.send_request_responses.append(response)
+
+    async def asend_request(self, payloads=None, timeout=None):
+        self.send_request_responses = []
+        for payload in payloads:
+            response = await self.ado_request(payload, timeout)
             self.send_request_responses.append(response)
 
     def registration_info_request(self, registration_id):
@@ -442,7 +456,62 @@ class BaseAPI(object):
         else:
             raise FCMError()
 
-    async def parse_responses(self):
+    def parse_responses(self):
+        """
+        Parses the json response sent back by the server and tries to get out the important return variables
+
+        Returns:
+            dict: multicast_ids (list), success (int), failure (int), canonical_ids (int),
+                results (list) and optional topic_message_id (str but None by default)
+
+        Raises:
+            FCMServerError: FCM is temporary not available
+            AuthenticationError: error authenticating the sender account
+            InvalidDataError: data passed to FCM was incorrecly structured
+        """
+        response_dict = {
+            'multicast_ids': [],
+            'success': 0,
+            'failure': 0,
+            'canonical_ids': 0,
+            'results': [],
+            'topic_message_id': None
+        }
+
+        for response in self.send_request_responses:
+            if response.status_code == 200:
+                if 'content-length' in response.headers and int(response.headers['content-length']) <= 0:
+                    raise FCMServerError("FCM server connection error, the response is empty")
+                else:
+                    parsed_response = response.json()
+
+                    multicast_id = parsed_response.get('multicast_id', None)
+                    success = parsed_response.get('success', 0)
+                    failure = parsed_response.get('failure', 0)
+                    canonical_ids = parsed_response.get('canonical_ids', 0)
+                    results = parsed_response.get('results', [])
+                    message_id = parsed_response.get('message_id', None)  # for topic messages
+                    if message_id:
+                        success = 1
+                    if multicast_id:
+                        response_dict['multicast_ids'].append(multicast_id)
+                    response_dict['success'] += success
+                    response_dict['failure'] += failure
+                    response_dict['canonical_ids'] += canonical_ids
+                    response_dict['results'].extend(results)
+                    response_dict['topic_message_id'] = message_id
+
+            elif response.status_code == 401:
+                raise AuthenticationError("There was an error authenticating the sender account")
+            elif response.status_code == 400:
+                raise InvalidDataError(response.text)
+            elif response.status_code == 404:
+                raise FCMNotRegisteredError("Token not registered")
+            else:
+                raise FCMServerError("FCM server is temporarily unavailable")
+        return response_dict
+
+    async def aparse_responses(self):
         """
         Parses the json response sent back by the server and tries to get out the important return variables
 
