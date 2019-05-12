@@ -4,32 +4,32 @@ from .errors import InvalidDataError
 
 class FCMNotification(BaseAPI):
     async def notify_single_device(self,
-                             registration_id=None,
-                             message_body=None,
-                             message_title=None,
-                             message_icon=None,
-                             sound=None,
-                             condition=None,
-                             collapse_key=None,
-                             delay_while_idle=False,
-                             time_to_live=None,
-                             restricted_package_name=None,
-                             low_priority=False,
-                             dry_run=False,
-                             data_message=None,
-                             click_action=None,
-                             badge=None,
-                             color=None,
-                             tag=None,
-                             body_loc_key=None,
-                             body_loc_args=None,
-                             title_loc_key=None,
-                             title_loc_args=None,
-                             content_available=None,
-                             android_channel_id=None,
-                             timeout=5,
-                             extra_notification_kwargs=None,
-                             extra_kwargs={}):
+                                   registration_id=None,
+                                   message_body=None,
+                                   message_title=None,
+                                   message_icon=None,
+                                   sound=None,
+                                   condition=None,
+                                   collapse_key=None,
+                                   delay_while_idle=False,
+                                   time_to_live=None,
+                                   restricted_package_name=None,
+                                   low_priority=False,
+                                   dry_run=False,
+                                   data_message=None,
+                                   click_action=None,
+                                   badge=None,
+                                   color=None,
+                                   tag=None,
+                                   body_loc_key=None,
+                                   body_loc_args=None,
+                                   title_loc_key=None,
+                                   title_loc_args=None,
+                                   content_available=None,
+                                   android_channel_id=None,
+                                   timeout=5,
+                                   extra_notification_kwargs=None,
+                                   extra_kwargs=None):
         """
         Send push notification to a single device
 
@@ -110,7 +110,7 @@ class FCMNotification(BaseAPI):
             android_channel_id=android_channel_id,
             content_available=content_available,
             extra_notification_kwargs=extra_notification_kwargs,
-            **extra_kwargs
+            **(extra_kwargs or {})
         )
 
         await self.send_request([payload], timeout)

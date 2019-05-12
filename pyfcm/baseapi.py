@@ -1,13 +1,21 @@
 import json
+import logging
 import os
 import time
 
 import aiohttp
+from aiohttp.resolver import AsyncResolver
+
 import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3 import Retry
 
 from .errors import AuthenticationError, InvalidDataError, FCMError, FCMServerError
+
+
+class ClientSession(aiohttp.ClientSession):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
 
 
 class BaseAPI(object):
@@ -41,7 +49,9 @@ class BaseAPI(object):
     # Number of times to retry calls to info endpoint
     INFO_RETRIES = 3
 
-    def __init__(self, api_key=None, proxy_dict=None, env=None, json_encoder=None):
+    def __init__(self, loop, api_key=None, proxy_dict=None, env=None, json_encoder=None):
+        self.loop = loop
+
         if api_key:
             self._FCM_API_KEY = api_key
         elif os.getenv('FCM_API_KEY', None):
@@ -51,6 +61,11 @@ class BaseAPI(object):
 
         self.FCM_REQ_PROXIES = None
         self.requests_session = requests.Session()
+
+        self.aiodns = AsyncResolver(loop=self.loop, nameservers=["8.8.8.8", "8.8.4.4"])
+        self.aiohttp_connector = aiohttp.TCPConnector(loop=self.loop, limit=0, ttl_dns_cache=600, resolver=self.aiodns, family=2)
+        self.aiohttp_session = ClientSession(headers=self.request_headers(), connector=self.aiohttp_connector, connector_owner=False)
+
         retries = Retry(backoff_factor=1, status_forcelist=[502, 503, 504],
                         method_whitelist=(Retry.DEFAULT_METHOD_WHITELIST | frozenset(['POST'])))
         self.requests_session.mount('http://', HTTPAdapter(max_retries=retries))
@@ -147,7 +162,7 @@ class BaseAPI(object):
                       content_available=None,
                       remove_notification=False,
                       android_channel_id=None,
-                      extra_notification_kwargs={},
+                      extra_notification_kwargs=None,
                       **extra_kwargs):
         """
         Parses parameters of FCMNotification's methods to FCM nested json
@@ -300,16 +315,18 @@ class BaseAPI(object):
         return self.json_dumps(fcm_payload)
 
     async def do_request(self, payload, timeout):
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.FCM_END_POINT, data=payload, headers=self.request_headers(), timeout=timeout) as _response:
-                await _response.text()
+        _timeout = aiohttp.ClientTimeout(total=timeout)
+        async with ClientSession(loop=self.loop, headers=self.request_headers(), connector=self.aiohttp_connector, connector_owner=False) as session:
+            async with session.post(self.FCM_END_POINT, data=payload, timeout=_timeout) as _response:
+                txt = await _response.text()
                 if 'Retry-After' in _response.headers and int(_response.headers['Retry-After']) > 0:
+                    logging.error("Sleep is required by FCM")
                     sleep_time = int(_response.headers['Retry-After'])
                     time.sleep(sleep_time)
                     second = await self.do_request(payload, timeout)
                     return second
 
-                return _response
+                return _response.status, _response.headers, txt
 
     async def send_request(self, payloads=None, timeout=None):
         self.send_request_responses = []
@@ -445,12 +462,12 @@ class BaseAPI(object):
             'topic_message_id': None
         }
 
-        for response in self.send_request_responses:
-            if response.status == 200:
-                if 'content-length' in response.headers and int(response.headers['content-length']) <= 0:
+        for status, headers, txt in self.send_request_responses:
+            if status == 200:
+                if 'content-length' in headers and int(headers['content-length']) <= 0:
                     raise FCMServerError("FCM server connection error, the response is empty")
                 else:
-                    parsed_response = await response.json()
+                    parsed_response = json.loads(txt)
 
                     multicast_id = parsed_response.get('multicast_id', None)
                     success = parsed_response.get('success', 0)
@@ -468,10 +485,10 @@ class BaseAPI(object):
                     response_dict['results'].extend(results)
                     response_dict['topic_message_id'] = message_id
 
-            elif response.status == 401:
+            elif status == 401:
                 raise AuthenticationError("There was an error authenticating the sender account")
-            elif response.status == 400:
-                raise InvalidDataError(response.text)
+            elif status == 400:
+                raise InvalidDataError(txt)
             else:
-                raise FCMServerError("FCM server is temporarily unavailable [Http {}]".format(response.status))
+                raise FCMServerError("FCM server is temporarily unavailable [Http {}]".format(status))
         return response_dict
