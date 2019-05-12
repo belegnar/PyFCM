@@ -2,6 +2,7 @@ import json
 import os
 import time
 
+import aiohttp
 import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3 import Retry
@@ -113,10 +114,10 @@ class BaseAPI(object):
             string: json
         """
         return json.dumps(
-            data, 
-            separators=(',', ':'), 
-            sort_keys=True, 
-            cls=self.json_encoder, 
+            data,
+            separators=(',', ':'),
+            sort_keys=True,
+            cls=self.json_encoder,
             ensure_ascii=False
         ).encode('utf8')
 
@@ -298,18 +299,22 @@ class BaseAPI(object):
 
         return self.json_dumps(fcm_payload)
 
-    def do_request(self, payload, timeout):
-        response = self.requests_session.post(self.FCM_END_POINT, data=payload, timeout=timeout)
-        if 'Retry-After' in response.headers and int(response.headers['Retry-After']) > 0:
-            sleep_time = int(response.headers['Retry-After'])
-            time.sleep(sleep_time)
-            return self.do_request(payload, timeout)
-        return response
+    async def do_request(self, payload, timeout):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.FCM_END_POINT, data=payload, headers=self.request_headers(), timeout=timeout) as _response:
+                await _response.text()
+                if 'Retry-After' in _response.headers and int(_response.headers['Retry-After']) > 0:
+                    sleep_time = int(_response.headers['Retry-After'])
+                    time.sleep(sleep_time)
+                    second = await self.do_request(payload, timeout)
+                    return second
 
-    def send_request(self, payloads=None, timeout=None):
+                return _response
+
+    async def send_request(self, payloads=None, timeout=None):
         self.send_request_responses = []
         for payload in payloads:
-            response = self.do_request(payload, timeout)
+            response = await self.do_request(payload, timeout)
             self.send_request_responses.append(response)
 
     def registration_info_request(self, registration_id):
@@ -418,7 +423,7 @@ class BaseAPI(object):
         else:
             raise FCMError()
 
-    def parse_responses(self):
+    async def parse_responses(self):
         """
         Parses the json response sent back by the server and tries to get out the important return variables
 
@@ -441,11 +446,11 @@ class BaseAPI(object):
         }
 
         for response in self.send_request_responses:
-            if response.status_code == 200:
+            if response.status == 200:
                 if 'content-length' in response.headers and int(response.headers['content-length']) <= 0:
                     raise FCMServerError("FCM server connection error, the response is empty")
                 else:
-                    parsed_response = response.json()
+                    parsed_response = await response.json()
 
                     multicast_id = parsed_response.get('multicast_id', None)
                     success = parsed_response.get('success', 0)
@@ -463,10 +468,10 @@ class BaseAPI(object):
                     response_dict['results'].extend(results)
                     response_dict['topic_message_id'] = message_id
 
-            elif response.status_code == 401:
+            elif response.status == 401:
                 raise AuthenticationError("There was an error authenticating the sender account")
-            elif response.status_code == 400:
+            elif response.status == 400:
                 raise InvalidDataError(response.text)
             else:
-                raise FCMServerError("FCM server is temporarily unavailable")
+                raise FCMServerError("FCM server is temporarily unavailable [Http {}]".format(response.status))
         return response_dict
