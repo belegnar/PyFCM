@@ -50,7 +50,7 @@ class BaseAPI(object):
     # Number of times to retry calls to info endpoint
     INFO_RETRIES = 3
 
-    def __init__(self, loop, api_key=None, proxy_dict=None, env=None, json_encoder=None):
+    def __init__(self, loop=None, api_key=None, proxy_dict=None, env=None, json_encoder=None):
         self.loop = loop
 
         if api_key:
