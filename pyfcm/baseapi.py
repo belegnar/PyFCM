@@ -11,7 +11,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3 import Retry
 
-from .errors import AuthenticationError, InvalidDataError, FCMError, FCMServerError
+from .errors import AuthenticationError, InvalidDataError, FCMError, FCMServerError, FCMNotRegisteredError
 
 
 class ClientSession(aiohttp.ClientSession):
@@ -490,6 +490,8 @@ class BaseAPI(object):
                 raise AuthenticationError("There was an error authenticating the sender account")
             elif status == 400:
                 raise InvalidDataError(txt)
+            elif status == 404:
+                raise FCMNotRegisteredError("Token not registered")
             else:
                 raise FCMServerError("FCM server is temporarily unavailable [Http {}]".format(status))
         return response_dict
