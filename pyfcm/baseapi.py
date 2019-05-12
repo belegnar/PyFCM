@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import socket
 import time
 
 import aiohttp
@@ -63,7 +64,7 @@ class BaseAPI(object):
         self.requests_session = requests.Session()
 
         self.aiodns = AsyncResolver(loop=self.loop, nameservers=["8.8.8.8", "8.8.4.4"])
-        self.aiohttp_connector = aiohttp.TCPConnector(loop=self.loop, limit=0, ttl_dns_cache=600, resolver=self.aiodns, family=2)
+        self.aiohttp_connector = aiohttp.TCPConnector(loop=self.loop, limit=0, ttl_dns_cache=600, resolver=self.aiodns, family=socket.AF_INET)
         self.aiohttp_session = ClientSession(headers=self.request_headers(), connector=self.aiohttp_connector, connector_owner=False)
 
         retries = Retry(backoff_factor=1, status_forcelist=[502, 503, 504],
